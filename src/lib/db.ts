@@ -62,6 +62,46 @@ export async function ensureSchema(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_drafts_business ON email_drafts(business_id);
 
+    CREATE TABLE IF NOT EXISTS web_assessments (
+      id                TEXT PRIMARY KEY,
+      business_id       TEXT NOT NULL UNIQUE REFERENCES businesses(id) ON DELETE CASCADE,
+      website_url       TEXT,
+      reachable         INTEGER NOT NULL DEFAULT 0,
+      https             INTEGER NOT NULL DEFAULT 0,
+      response_ms       INTEGER,
+      has_viewport      INTEGER NOT NULL DEFAULT 0,
+      copyright_year    INTEGER,
+      tech_stack        TEXT,
+      is_placeholder    INTEGER NOT NULL DEFAULT 0,
+      quality_score     INTEGER NOT NULL DEFAULT 0,
+      pitch_priority    INTEGER NOT NULL DEFAULT 0,
+      issues_json       TEXT NOT NULL DEFAULT '[]',
+      pitch_summary     TEXT,
+      jack_status       TEXT NOT NULL DEFAULT 'not_assessed',
+      jack_notes        TEXT NOT NULL DEFAULT '',
+      jack_last_contacted TEXT,
+      assessed_at       TEXT,
+      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_web_priority ON web_assessments(pitch_priority DESC);
+    CREATE INDEX IF NOT EXISTS idx_web_quality ON web_assessments(quality_score);
+    CREATE INDEX IF NOT EXISTS idx_web_status ON web_assessments(jack_status);
+
+    CREATE TABLE IF NOT EXISTS pitch_drafts (
+      id           TEXT PRIMARY KEY,
+      business_id  TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+      subject      TEXT NOT NULL,
+      body         TEXT NOT NULL,
+      teardown     TEXT,
+      sent         INTEGER NOT NULL DEFAULT 0,
+      sent_at      TEXT,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_pitch_business ON pitch_drafts(business_id);
+
     CREATE TABLE IF NOT EXISTS scrape_runs (
       id              TEXT PRIMARY KEY,
       categories      TEXT NOT NULL,
@@ -147,6 +187,55 @@ export interface EmailDraft {
   sent: boolean;
   sent_at: string | null;
   created_at: string;
+}
+
+export type JackStatus =
+  | "not_assessed"
+  | "assessed"
+  | "pitch_drafted"
+  | "contacted"
+  | "replied"
+  | "meeting"
+  | "client"
+  | "dead";
+
+export interface WebAssessment {
+  id: string;
+  business_id: string;
+  website_url: string | null;
+  reachable: boolean;
+  https: boolean;
+  response_ms: number | null;
+  has_viewport: boolean;
+  copyright_year: number | null;
+  tech_stack: string | null;
+  is_placeholder: boolean;
+  quality_score: number;
+  pitch_priority: number;
+  issues_json: string;
+  pitch_summary: string | null;
+  jack_status: JackStatus;
+  jack_notes: string;
+  jack_last_contacted: string | null;
+  assessed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PitchDraft {
+  id: string;
+  business_id: string;
+  subject: string;
+  body: string;
+  teardown: string | null;
+  sent: boolean;
+  sent_at: string | null;
+  created_at: string;
+}
+
+// Joined row for the /web view — every business with its (possibly null) assessment
+export interface BusinessWithAssessment extends Business {
+  assessment: WebAssessment | null;
 }
 
 function rowAs<T>(row: Row): T {
@@ -328,6 +417,164 @@ export async function logScrapeRun(params: {
       params.status === "running" ? null : new Date().toISOString(),
     ],
   });
+}
+
+// ─── Web assessment queries ───
+
+function rowToAssessment(row: Row): WebAssessment {
+  const r = row as unknown as Record<string, unknown>;
+  return {
+    ...(r as unknown as WebAssessment),
+    reachable: !!r.reachable,
+    https: !!r.https,
+    has_viewport: !!r.has_viewport,
+    is_placeholder: !!r.is_placeholder,
+  };
+}
+
+export async function getAssessment(businessId: string): Promise<WebAssessment | null> {
+  await ensureSchema();
+  const db = getClient();
+  const r = await db.execute({ sql: "SELECT * FROM web_assessments WHERE business_id = ?", args: [businessId] });
+  return r.rows[0] ? rowToAssessment(r.rows[0]) : null;
+}
+
+export async function upsertAssessment(a: Omit<WebAssessment, "id" | "created_at" | "updated_at"> & { id?: string }): Promise<WebAssessment> {
+  await ensureSchema();
+  const db = getClient();
+  const existing = await getAssessment(a.business_id);
+  const now = new Date().toISOString();
+  if (existing) {
+    await db.execute({
+      sql: `UPDATE web_assessments SET
+        website_url=?, reachable=?, https=?, response_ms=?, has_viewport=?,
+        copyright_year=?, tech_stack=?, is_placeholder=?, quality_score=?,
+        pitch_priority=?, issues_json=?, pitch_summary=?, assessed_at=?, updated_at=?
+        WHERE business_id = ?`,
+      args: [
+        a.website_url, a.reachable ? 1 : 0, a.https ? 1 : 0, a.response_ms ?? null,
+        a.has_viewport ? 1 : 0, a.copyright_year ?? null, a.tech_stack ?? null,
+        a.is_placeholder ? 1 : 0, a.quality_score, a.pitch_priority,
+        a.issues_json, a.pitch_summary ?? null, a.assessed_at ?? now, now,
+        a.business_id,
+      ],
+    });
+  } else {
+    const id = a.id || crypto.randomUUID();
+    await db.execute({
+      sql: `INSERT INTO web_assessments (
+        id, business_id, website_url, reachable, https, response_ms, has_viewport,
+        copyright_year, tech_stack, is_placeholder, quality_score, pitch_priority,
+        issues_json, pitch_summary, jack_status, jack_notes, assessed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        id, a.business_id, a.website_url,
+        a.reachable ? 1 : 0, a.https ? 1 : 0, a.response_ms ?? null, a.has_viewport ? 1 : 0,
+        a.copyright_year ?? null, a.tech_stack ?? null, a.is_placeholder ? 1 : 0,
+        a.quality_score, a.pitch_priority, a.issues_json, a.pitch_summary ?? null,
+        a.jack_status || "assessed", a.jack_notes || "", a.assessed_at ?? now,
+      ],
+    });
+  }
+  const updated = await getAssessment(a.business_id);
+  if (!updated) throw new Error(`Assessment for ${a.business_id} vanished`);
+  return updated;
+}
+
+export async function updateAssessment(businessId: string, updates: Partial<WebAssessment>): Promise<WebAssessment> {
+  await ensureSchema();
+  const db = getClient();
+  const fields: string[] = [];
+  const args: (string | number | null)[] = [];
+  for (const [k, v] of Object.entries(updates)) {
+    if (k === "id" || k === "business_id" || k === "created_at") continue;
+    fields.push(`${k} = ?`);
+    if (typeof v === "boolean") args.push(v ? 1 : 0);
+    else args.push(v as string | number | null);
+  }
+  fields.push("updated_at = ?");
+  args.push(new Date().toISOString());
+  args.push(businessId);
+  await db.execute({
+    sql: `UPDATE web_assessments SET ${fields.join(", ")} WHERE business_id = ?`,
+    args,
+  });
+  const updated = await getAssessment(businessId);
+  if (!updated) throw new Error(`Assessment for ${businessId} not found`);
+  return updated;
+}
+
+// Returns every business with its (possibly null) assessment, sorted by pitch_priority DESC.
+// Businesses without an assessment row appear last (priority NULL → 0).
+export async function listBusinessesWithAssessments(): Promise<BusinessWithAssessment[]> {
+  await ensureSchema();
+  const db = getClient();
+  const r = await db.execute(`
+    SELECT b.*,
+           a.id AS a_id, a.website_url AS a_website_url, a.reachable AS a_reachable,
+           a.https AS a_https, a.response_ms AS a_response_ms, a.has_viewport AS a_has_viewport,
+           a.copyright_year AS a_copyright_year, a.tech_stack AS a_tech_stack,
+           a.is_placeholder AS a_is_placeholder, a.quality_score AS a_quality_score,
+           a.pitch_priority AS a_pitch_priority, a.issues_json AS a_issues_json,
+           a.pitch_summary AS a_pitch_summary, a.jack_status AS a_jack_status,
+           a.jack_notes AS a_jack_notes, a.jack_last_contacted AS a_jack_last_contacted,
+           a.assessed_at AS a_assessed_at, a.created_at AS a_created_at, a.updated_at AS a_updated_at
+    FROM businesses b
+    LEFT JOIN web_assessments a ON a.business_id = b.id
+    ORDER BY COALESCE(a.pitch_priority, 0) DESC, b.fit_score DESC
+  `);
+  return r.rows.map((row) => {
+    const r = row as unknown as Record<string, unknown>;
+    const business: Business = {
+      id: r.id as string, name: r.name as string, category: r.category as Business["category"],
+      subcategory: (r.subcategory as string) || null, address: (r.address as string) || null,
+      lat: (r.lat as number) ?? null, lng: (r.lng as number) ?? null,
+      website: (r.website as string) || null, email: (r.email as string) || null,
+      phone: (r.phone as string) || null, contact_person: (r.contact_person as string) || null,
+      contact_role: (r.contact_role as string) || null, google_place_id: (r.google_place_id as string) || null,
+      google_rating: (r.google_rating as number) ?? null, google_reviews: (r.google_reviews as number) ?? null,
+      source: r.source as string, source_url: (r.source_url as string) || null,
+      fit_score: r.fit_score as number, fit_reason: (r.fit_reason as string) || null,
+      status: r.status as Business["status"], notes: r.notes as string,
+      last_contacted: (r.last_contacted as string) || null,
+      created_at: r.created_at as string, updated_at: r.updated_at as string,
+    };
+    const assessment: WebAssessment | null = r.a_id ? {
+      id: r.a_id as string, business_id: r.id as string,
+      website_url: (r.a_website_url as string) || null,
+      reachable: !!r.a_reachable, https: !!r.a_https,
+      response_ms: (r.a_response_ms as number) ?? null,
+      has_viewport: !!r.a_has_viewport,
+      copyright_year: (r.a_copyright_year as number) ?? null,
+      tech_stack: (r.a_tech_stack as string) || null,
+      is_placeholder: !!r.a_is_placeholder,
+      quality_score: r.a_quality_score as number,
+      pitch_priority: r.a_pitch_priority as number,
+      issues_json: (r.a_issues_json as string) || "[]",
+      pitch_summary: (r.a_pitch_summary as string) || null,
+      jack_status: r.a_jack_status as JackStatus,
+      jack_notes: (r.a_jack_notes as string) || "",
+      jack_last_contacted: (r.a_jack_last_contacted as string) || null,
+      assessed_at: (r.a_assessed_at as string) || null,
+      created_at: r.a_created_at as string,
+      updated_at: r.a_updated_at as string,
+    } : null;
+    return { ...business, assessment };
+  });
+}
+
+export async function createPitchDraft(d: Omit<PitchDraft, "id" | "created_at" | "sent" | "sent_at">): Promise<PitchDraft> {
+  await ensureSchema();
+  const db = getClient();
+  const id = crypto.randomUUID();
+  await db.execute({
+    sql: `INSERT INTO pitch_drafts (id, business_id, subject, body, teardown) VALUES (?, ?, ?, ?, ?)`,
+    args: [id, d.business_id, d.subject, d.body, d.teardown ?? null],
+  });
+  const r = await db.execute({ sql: "SELECT * FROM pitch_drafts WHERE id = ?", args: [id] });
+  const row = r.rows[0];
+  if (!row) throw new Error(`Pitch draft ${id} vanished`);
+  return { ...rowAs<PitchDraft>(row), sent: !!row.sent };
 }
 
 export async function stats(): Promise<{

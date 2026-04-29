@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "schema:push": "tsx src/scripts/push-schema.ts",
     "scrape": "tsx src/scripts/scrape.ts",
+    "assess": "tsx src/scripts/assess-websites.ts",
     "seed:demo": "tsx src/scripts/seed-demo.ts"
   },
   "dependencies": {

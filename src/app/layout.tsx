@@ -41,6 +41,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               >
                 Map
               </Link>
+              <span className="mx-2 text-[var(--color-border)]">|</span>
+              <Link
+                href="/web"
+                className="px-3 py-1.5 rounded-md text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-white transition"
+                title="Warman Consulting view"
+              >
+                Web pitches
+              </Link>
             </nav>
           </div>
         </header>
