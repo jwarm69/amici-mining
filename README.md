@@ -1,6 +1,11 @@
 # Amici Mining
 
-Geo-targeted catering-prospect pipeline for Amici Market (Palm Beach, FL).
+**Live**: https://amici-mining.vercel.app — pipeline (`/`) and web-rebuild prospects (`/web`)
+**Repo**: https://github.com/jwarm69/amici-mining
+
+Geo-targeted catering-prospect pipeline for Amici Market (Palm Beach, FL), with a second
+view (`/web`) for Warman Consulting that scores the same businesses by site quality and
+generates rebuild pitches.
 
 Scrapes businesses inside the Rybovich → Forest Hill / east-of-Olive zone via Google Places, scores them for catering fit, and lets you draft outreach emails in Maurizio's voice.
 
