@@ -49,6 +49,22 @@ function detectCopyrightYear(html: string): number | null {
   return years.length ? Math.max(...years) : null;
 }
 
+// Chrome-like headers to avoid bot detection (Cloudflare, AWS WAF, etc.). Many real-world
+// business sites silently 403 our bot UA, then come back as "unreachable" and inflate our
+// pitch_priority list with false positives. Spoofing a real browser UA is standard practice
+// for this kind of "is this site alive" check.
+const BROWSER_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Accept-Encoding": "gzip, deflate, br",
+  "Cache-Control": "no-cache",
+  "Sec-Fetch-Dest": "document",
+  "Sec-Fetch-Mode": "navigate",
+  "Sec-Fetch-Site": "none",
+  "Upgrade-Insecure-Requests": "1",
+};
+
 export async function fetchSiteSignals(websiteUrl: string): Promise<ProgrammaticSignals> {
   const empty: ProgrammaticSignals = {
     reachable: false,
@@ -71,15 +87,26 @@ export async function fetchSiteSignals(websiteUrl: string): Promise<Programmatic
   }
 
   const start = Date.now();
+  let res: Response | null = null;
+  // Retry once on network/abort errors. Many sites are flaky; one retry catches transient
+  // failures without doubling our latency budget on dead sites.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      res = await fetch(url.toString(), {
+        signal: AbortSignal.timeout(15000),
+        redirect: "follow",
+        headers: BROWSER_HEADERS,
+      });
+      break;
+    } catch {
+      if (attempt === 1) return { ...empty, reachable: false };
+    }
+  }
+  if (!res) return { ...empty, reachable: false };
+
   try {
-    const res = await fetch(url.toString(), {
-      signal: AbortSignal.timeout(10000),
-      redirect: "follow",
-      headers: { "User-Agent": "WarmanConsultingBot/1.0 (+https://warmanconsulting.local)" },
-    });
     const elapsed = Date.now() - start;
     const html = await res.text();
-    const lower = html.toLowerCase();
     const finalUrl = new URL(res.url);
 
     const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);

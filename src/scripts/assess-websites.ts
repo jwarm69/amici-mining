@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
-import { listBusinesses, upsertAssessment, getAssessment } from "../lib/db";
+import { listBusinesses, upsertAssessment, getAssessment, type Business } from "../lib/db";
 import { fetchSiteSignals, judgeWithClaude, combineScore, computePitchPriority, usageToCost, type UsageRecord } from "../lib/web-quality";
+import { isExcludedName } from "../lib/scoring";
 
 const DEFAULT_MAX_COST = 6.0; // hard ceiling — set per user budget
 
@@ -11,6 +12,7 @@ async function main() {
   }
   const skipLlm = process.argv.includes("--no-llm");
   const onlyMissing = process.argv.includes("--only-missing");
+  const onlyBroken = process.argv.includes("--only-broken");
   if (!process.env.ANTHROPIC_API_KEY && !skipLlm) {
     console.error("ANTHROPIC_API_KEY is not set. Re-run with --no-llm to skip LLM judgment.");
     process.exit(1);
@@ -23,10 +25,25 @@ async function main() {
   const minFitArg = process.argv.find((a) => a.startsWith("--min-fit="));
   const minFit = minFitArg ? parseInt(minFitArg.replace("--min-fit=", "")) : 0;
 
-  let businesses = await listBusinesses();
+  let businesses: Business[] = await listBusinesses();
+  // Drop excluded names (court/government/events/etc.) from any assessment runs.
+  businesses = businesses.filter((b) => !isExcludedName(b.name));
   // Sort by fit_score so we assess most valuable prospects FIRST — if budget runs out,
   // we have full LLM coverage on the businesses that matter most for outreach.
   businesses.sort((a, b) => b.fit_score - a.fit_score);
+
+  // --only-broken: re-assess businesses whose previous assessment said unreachable
+  // (quality_score <= 5). The fetcher with browser headers + retries should resolve
+  // most of these false positives.
+  if (onlyBroken) {
+    const filtered: Business[] = [];
+    for (const b of businesses) {
+      const a = await getAssessment(b.id);
+      if (a && a.quality_score > 0 && a.quality_score <= 5) filtered.push(b);
+    }
+    businesses = filtered;
+    console.log(`--only-broken: ${businesses.length} businesses with quality<=5 to retry`);
+  }
 
   if (minFit > 0) businesses = businesses.filter((b) => b.fit_score >= minFit);
   if (topN) businesses = businesses.slice(0, topN);

@@ -10,7 +10,7 @@ import {
   SEARCH_INCLUDED_TYPES,
   NICHE_TEXT_QUERIES,
 } from "../lib/places";
-import { scoreBusiness } from "../lib/scoring";
+import { scoreBusiness, isExcludedName } from "../lib/scoring";
 
 const COST_PER_CALL = 0.032;
 const SAFETY_CAP_USD = 50; // Refuses to run if estimated cost > this. Free tier = $200/mo.
@@ -141,6 +141,18 @@ async function main() {
       source: "google_places",
       source_url: place.websiteUri ?? null,
     };
+    // Drop excluded names (courts/govt/events/etc.) into status=dead with fit=0 so they
+    // never clutter the active pipeline. They're still in the DB for reference.
+    if (isExcludedName(partial.name)) {
+      await upsertBusiness({
+        ...partial,
+        fit_score: 0,
+        fit_reason: "excluded — not a real catering/web customer (court/govt/event/etc.)",
+        status: "dead",
+      });
+      totalSkipped++;
+      return false;
+    }
     const fit = scoreBusiness(partial);
     await upsertBusiness({ ...partial, fit_score: fit.score, fit_reason: fit.reason });
     totalInserted++;

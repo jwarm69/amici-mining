@@ -131,6 +131,31 @@ export function labelForCategory(c: BusinessCategory): string {
   return map[c] || c;
 }
 
+// Names that aren't actually viable customers for catering OR web rebuilds —
+// government services, courts, public infrastructure, one-off events, etc.
+// Matched as substring (case-insensitive) on the business name.
+const EXCLUSION_PATTERNS: RegExp[] = [
+  /\b(court|courthouse|clerk of)\b/i,
+  /\bcomptroller\b/i,
+  /\b(department of|division of|bureau of)\b/i,
+  /\b(public dock|public marina|public works)\b/i,
+  /\b(sheriff|police|fire dept|fire department|fire station)\b/i,
+  /\b(boat show|yacht show|trade show|expo|conference center)\b/i,
+  /\b(post office|usps|dmv)\b/i,
+  /\bschool district\b/i,
+  /\b(library|public library)\b/i,
+  /\bhealth care district\b/i, // government org, not a hospital
+  /\b(city hall|town hall|municipal)\b/i,
+  /\b(parking garage|parking lot)\b/i,
+  /\b(homeless|food pantry)\b/i,
+];
+
+// True if the business name matches any exclusion pattern. Such businesses should be
+// dropped from outreach pipelines (status=dead, fit_score=0) — they aren't real customers.
+export function isExcludedName(name: string): boolean {
+  return EXCLUSION_PATTERNS.some((p) => p.test(name));
+}
+
 export function colorForCategory(c: BusinessCategory): string {
   const map: Record<BusinessCategory, string> = {
     marina: "#1E88E5",
