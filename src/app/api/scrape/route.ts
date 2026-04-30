@@ -14,7 +14,10 @@ import { scoreBusiness } from "@/lib/scoring";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 800; // Vercel Pro limit; Hobby caps at 60s — full scrape needs ~10min
+// Vercel Hobby caps at 300s (5min). A full ~750-call scrape needs ~10min, so it can't run
+// here — use the CLI instead (`npm run scrape`). This route is fine for small targeted runs
+// like `--groups=hospitality` (~37 calls, finishes in <1min).
+export const maxDuration = 300;
 
 const COST_PER_CALL = 0.032;
 
