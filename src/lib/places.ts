@@ -30,7 +30,6 @@ export const TYPE_TO_CATEGORY: Array<[string, string]> = [
   ["boat_dealer", "yacht_services"],
   ["lawyer", "law_firm"],
   ["accounting", "accounting"],
-  ["financial_consultant", "wealth_management"],
   ["real_estate_agency", "real_estate"],
   ["doctor", "medical"],
   ["dentist", "medical"],
@@ -63,7 +62,9 @@ export function classifyTypes(types: string[] | undefined, primaryType?: string)
 // 20-result slot per grid cell. This avoids losing density in cells where multiple
 // types overlap (e.g. a downtown cell with 15 lawyers + 12 accountants).
 export const SEARCH_INCLUDED_TYPES: Record<string, string[]> = {
-  professional: ["lawyer", "accounting", "real_estate_agency", "financial_consultant"],
+  // Note: "financial_consultant" / "financial_planner" / "wealth_management" aren't valid
+  // Google Places types — the `wealth management palm beach` niche text query catches these instead.
+  professional: ["lawyer", "accounting", "real_estate_agency"],
   marine: ["marina", "boat_rental", "boat_dealer"],
   medical_wellness: ["doctor", "dentist", "spa"],
   beauty: ["beauty_salon", "hair_salon", "nail_salon"],

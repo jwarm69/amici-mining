@@ -152,21 +152,34 @@ async function main() {
     for (const type of types) {
       console.log(`\n→ ${type}`);
       let typeNew = 0;
+      let typeFailed = false;
       for (let i = 0; i < grid.length; i++) {
         const cell = grid[i];
-        const places = await searchNearby({
-          apiKey,
-          lat: cell.lat,
-          lng: cell.lng,
-          radiusMeters: cell.radius,
-          includedTypes: [type],
-        });
-        callsMade++;
-        for (const p of places) {
-          if (await processPlace(p)) typeNew++;
+        try {
+          const places = await searchNearby({
+            apiKey,
+            lat: cell.lat,
+            lng: cell.lng,
+            radiusMeters: cell.radius,
+            includedTypes: [type],
+          });
+          callsMade++;
+          for (const p of places) {
+            if (await processPlace(p)) typeNew++;
+          }
+        } catch (err) {
+          // If a type is invalid (400 from Google), skip the rest of the grid for this type
+          // — no point in retrying 36 more cells with the same broken arg. Continue with the next type.
+          const msg = err instanceof Error ? err.message : String(err);
+          console.log(`  cell ${i + 1}/${grid.length} ERROR: ${msg.slice(0, 100)}`);
+          if (msg.includes("Unsupported types") || msg.includes("INVALID_ARGUMENT")) {
+            typeFailed = true;
+            break;
+          }
+          // Transient errors: keep going
         }
       }
-      console.log(`  +${typeNew} new (cumulative: ${totalInserted})`);
+      console.log(`  +${typeNew} new (cumulative: ${totalInserted})${typeFailed ? " [type aborted]" : ""}`);
     }
 
     // ─── Pass 2: niche searchText queries ───
