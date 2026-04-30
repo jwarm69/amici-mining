@@ -141,26 +141,56 @@ function client(): Anthropic {
   return _client;
 }
 
+export interface UsageRecord {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+}
+
+// Sonnet 4.5 pricing per 1M tokens
+const SONNET_PRICE = {
+  input: 3.0,
+  cache_creation: 3.75, // 25% premium on first cache write
+  cache_read: 0.30,     // 10% of input price
+  output: 15.0,
+};
+
+export function usageToCost(u: UsageRecord): number {
+  return (
+    (u.input_tokens * SONNET_PRICE.input) / 1_000_000 +
+    (u.cache_creation_input_tokens * SONNET_PRICE.cache_creation) / 1_000_000 +
+    (u.cache_read_input_tokens * SONNET_PRICE.cache_read) / 1_000_000 +
+    (u.output_tokens * SONNET_PRICE.output) / 1_000_000
+  );
+}
+
 export async function judgeWithClaude(params: {
   business_name: string;
   category: string;
   website_url: string;
   signals: ProgrammaticSignals;
-}): Promise<QualityVerdict> {
+}): Promise<{ verdict: QualityVerdict; usage: UsageRecord }> {
   const { business_name, category, website_url, signals } = params;
 
   if (!signals.reachable) {
     return {
-      quality_score: 5,
-      issues: ["Website unreachable / broken at the URL on file"],
-      pitch_summary: `Their site at ${website_url} doesn't load — that's the kind of thing that quietly costs them business. Worth flagging.`,
+      verdict: {
+        quality_score: 5,
+        issues: ["Website unreachable / broken at the URL on file"],
+        pitch_summary: `Their site at ${website_url} doesn't load — that's the kind of thing that quietly costs them business. Worth flagging.`,
+      },
+      usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
     };
   }
   if (signals.is_placeholder) {
     return {
-      quality_score: 10,
-      issues: ['Site is a "coming soon" / parked placeholder'],
-      pitch_summary: "They're paying for a domain but have nothing on it. Quick win to put up a real one-page site with their info and an inquiry form.",
+      verdict: {
+        quality_score: 10,
+        issues: ['Site is a "coming soon" / parked placeholder'],
+        pitch_summary: "They're paying for a domain but have nothing on it. Quick win to put up a real one-page site with their info and an inquiry form.",
+      },
+      usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
     };
   }
 
@@ -190,9 +220,18 @@ Respond ONLY with this JSON (no other text):
     model: "claude-sonnet-4-20250514",
     max_tokens: 800,
     temperature: 0.4,
-    system: ASSESSOR_SYSTEM,
+    // Cache the system prompt — it's identical across all assessor calls.
+    // First call writes the cache (25% premium); subsequent calls within 5min read at 10%.
+    system: [{ type: "text", text: ASSESSOR_SYSTEM, cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content: prompt }],
   });
+
+  const usage: UsageRecord = {
+    input_tokens: response.usage.input_tokens || 0,
+    output_tokens: response.usage.output_tokens || 0,
+    cache_creation_input_tokens: response.usage.cache_creation_input_tokens || 0,
+    cache_read_input_tokens: response.usage.cache_read_input_tokens || 0,
+  };
 
   const block = response.content[0];
   if (block.type !== "text") throw new Error("Claude returned non-text");
@@ -200,9 +239,12 @@ Respond ONLY with this JSON (no other text):
   try {
     const parsed = JSON.parse(cleaned);
     return {
-      quality_score: Math.max(0, Math.min(100, parseInt(parsed.quality_score) || 0)),
-      issues: Array.isArray(parsed.issues) ? parsed.issues.slice(0, 5).map(String) : [],
-      pitch_summary: String(parsed.pitch_summary || ""),
+      verdict: {
+        quality_score: Math.max(0, Math.min(100, parseInt(parsed.quality_score) || 0)),
+        issues: Array.isArray(parsed.issues) ? parsed.issues.slice(0, 5).map(String) : [],
+        pitch_summary: String(parsed.pitch_summary || ""),
+      },
+      usage,
     };
   } catch (err) {
     throw new Error(`Failed to parse Claude verdict: ${err}\nRaw: ${block.text}`);

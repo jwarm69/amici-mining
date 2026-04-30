@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
   }
 
   const signals = await fetchSiteSignals(business.website);
-  const verdict = await judgeWithClaude({
+  const { verdict } = await judgeWithClaude({
     business_name: business.name, category: business.category,
     website_url: business.website, signals,
   });
