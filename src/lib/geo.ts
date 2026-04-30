@@ -74,3 +74,65 @@ export function gridForPolygon(
 export function isInAmiciZone(lat: number, lng: number): boolean {
   return pointInPolygon([lat, lng], AMICI_ZONE);
 }
+
+// Rectangular bounding box of the polygon, used by searchText (which doesn't accept polygons).
+export function polygonBounds(polygon: [number, number][]): {
+  low: { lat: number; lng: number };
+  high: { lat: number; lng: number };
+} {
+  const lats = polygon.map((p) => p[0]);
+  const lngs = polygon.map((p) => p[1]);
+  return {
+    low: { lat: Math.min(...lats), lng: Math.min(...lngs) },
+    high: { lat: Math.max(...lats), lng: Math.max(...lngs) },
+  };
+}
+
+// Density-aware grid: smaller cells south of `densityLatBoundary` (downtown WPB / Worth Ave),
+// larger cells north (Rybovich / Northwood / residential). Per-type calls + smaller cells in
+// dense areas means we don't lose results to the 20/call cap.
+//
+// For the Amici zone, 26.7100 sits roughly at the line where downtown/Worth Ave density gives
+// way to lower-density Northwood/SoSo. Tune if the zone changes.
+export function gridDensityAware(
+  polygon: [number, number][],
+  densityLatBoundary = 26.7100,
+): { lat: number; lng: number; radius: number }[] {
+  const lats = polygon.map((p) => p[0]);
+  const lngs = polygon.map((p) => p[1]);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+  const metersPerDegLat = 111320;
+  const centerLat = (minLat + maxLat) / 2;
+  const metersPerDegLng = 111320 * Math.cos((centerLat * Math.PI) / 180);
+
+  const cells: { lat: number; lng: number; radius: number }[] = [];
+  const bands: Array<{ from: number; to: number; step: number; radius: number }> = [
+    // South: downtown WPB + Worth Ave / Palm Beach (high density)
+    { from: minLat, to: Math.min(densityLatBoundary, maxLat), step: 600, radius: 400 },
+    // North: Northwood / Rybovich (lower density)
+    { from: Math.min(densityLatBoundary, maxLat), to: maxLat, step: 900, radius: 600 },
+  ];
+
+  for (const band of bands) {
+    if (band.from >= band.to) continue;
+    const stepLat = band.step / metersPerDegLat;
+    const stepLng = band.step / metersPerDegLng;
+    for (let lat = band.from; lat <= band.to; lat += stepLat) {
+      for (let lng = minLng; lng <= maxLng; lng += stepLng) {
+        if (
+          pointInPolygon([lat, lng], polygon) ||
+          pointInPolygon([lat + stepLat / 2, lng], polygon) ||
+          pointInPolygon([lat - stepLat / 2, lng], polygon) ||
+          pointInPolygon([lat, lng + stepLng / 2], polygon) ||
+          pointInPolygon([lat, lng - stepLng / 2], polygon)
+        ) {
+          cells.push({ lat, lng, radius: band.radius });
+        }
+      }
+    }
+  }
+  return cells;
+}

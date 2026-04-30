@@ -58,17 +58,46 @@ export function classifyTypes(types: string[] | undefined, primaryType?: string)
   return "other";
 }
 
-// "Included types" we want to query. Each element below is one searchNearby call per grid cell.
-// Sticking to high-value catering targets — skip retail noise like gas stations, etc.
+// "Included types" grouped for human-friendly CLI filtering (`--groups=marine`).
+// Internally, the scraper queries ONE TYPE PER CALL — so each type below gets its own
+// 20-result slot per grid cell. This avoids losing density in cells where multiple
+// types overlap (e.g. a downtown cell with 15 lawyers + 12 accountants).
 export const SEARCH_INCLUDED_TYPES: Record<string, string[]> = {
-  professional: ["lawyer", "accounting", "real_estate_agency"],
+  professional: ["lawyer", "accounting", "real_estate_agency", "financial_consultant"],
   marine: ["marina", "boat_rental", "boat_dealer"],
   medical_wellness: ["doctor", "dentist", "spa"],
   beauty: ["beauty_salon", "hair_salon", "nail_salon"],
-  retail_luxury: ["jewelry_store", "art_gallery", "furniture_store"],
+  retail_luxury: ["jewelry_store", "art_gallery", "furniture_store", "home_goods_store"],
   fitness: ["gym", "yoga_studio"],
   hospitality: ["lodging"],
 };
+
+export function flattenTypes(groups: string[]): string[] {
+  const out = new Set<string>();
+  for (const g of groups) {
+    const types = SEARCH_INCLUDED_TYPES[g];
+    if (!types) continue;
+    for (const t of types) out.add(t);
+  }
+  return Array.from(out);
+}
+
+// Niche text queries for categories Google's type taxonomy misses or misclassifies.
+// Each runs ONE searchText call bounded to the polygon — returns up to 20 results.
+// expectedCategory overrides classifyTypes() so e.g. "yacht broker" goes to yacht_services
+// even though Google may tag it as real_estate_agency or just establishment.
+export const NICHE_TEXT_QUERIES: Array<{ query: string; expectedCategory: string }> = [
+  { query: "yacht broker palm beach", expectedCategory: "yacht_services" },
+  { query: "yacht management palm beach", expectedCategory: "yacht_services" },
+  { query: "boat charter palm beach", expectedCategory: "yacht_services" },
+  { query: "interior designer palm beach", expectedCategory: "interior_design" },
+  { query: "concierge medicine palm beach", expectedCategory: "medical" },
+  { query: "plastic surgeon palm beach", expectedCategory: "medical" },
+  { query: "med spa palm beach", expectedCategory: "wellness" },
+  { query: "wealth management palm beach", expectedCategory: "wealth_management" },
+  { query: "family office palm beach", expectedCategory: "wealth_management" },
+  { query: "private equity firm palm beach", expectedCategory: "wealth_management" },
+];
 
 export interface SearchOptions {
   apiKey: string;
@@ -77,6 +106,62 @@ export interface SearchOptions {
   radiusMeters: number;
   includedTypes: string[];
   maxResults?: number; // 1-20
+}
+
+export interface SearchTextOptions {
+  apiKey: string;
+  query: string;
+  // High/low corners of a rectangle bounding the polygon.
+  // searchText accepts a rectangular locationRestriction (not arbitrary polygons).
+  bounds: { low: { lat: number; lng: number }; high: { lat: number; lng: number } };
+  maxResults?: number;
+}
+
+export async function searchText(opts: SearchTextOptions): Promise<PlacesNearbyResult[]> {
+  const { apiKey, query, bounds, maxResults = 20 } = opts;
+  const fieldMask = [
+    "places.id",
+    "places.displayName",
+    "places.primaryType",
+    "places.types",
+    "places.formattedAddress",
+    "places.location",
+    "places.rating",
+    "places.userRatingCount",
+    "places.websiteUri",
+    "places.nationalPhoneNumber",
+    "places.businessStatus",
+  ].join(",");
+
+  const res = await fetch(`${PLACES_BASE}/places:searchText`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": apiKey,
+      "X-Goog-FieldMask": fieldMask,
+    },
+    body: JSON.stringify({
+      textQuery: query,
+      pageSize: maxResults,
+      locationRestriction: {
+        rectangle: {
+          low: { latitude: bounds.low.lat, longitude: bounds.low.lng },
+          high: { latitude: bounds.high.lat, longitude: bounds.high.lng },
+        },
+      },
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Google Places searchText failed: ${res.status} ${text}`);
+  }
+
+  const json = await res.json();
+  return (json.places || []).map((p: PlacesNearbyResult) => ({
+    ...p,
+    name: p.displayName?.text || p.id,
+  }));
 }
 
 export async function searchNearby(opts: SearchOptions): Promise<PlacesNearbyResult[]> {
